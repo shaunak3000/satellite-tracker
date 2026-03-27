@@ -319,9 +319,9 @@ const ST_PAUL_DEG = { lat: 44.9537, lon: -93.0900 };
 
 // Mutable observer — updated by geolocation, falls back to St Paul
 let observer = {
-  lat: satellite.degreesToRadians(ST_PAUL_DEG.lat),
-  lon: satellite.degreesToRadians(ST_PAUL_DEG.lon),
-  alt: 0.290   // km
+  latitude:  satellite.degreesToRadians(ST_PAUL_DEG.lat),
+  longitude: satellite.degreesToRadians(ST_PAUL_DEG.lon),
+  height:    0.290   // km
 };
 let observerLabel = 'St Paul, MN (default)';
 
@@ -764,7 +764,7 @@ const locateBtn  = document.getElementById('locate-btn');
 const locLabel   = document.getElementById('loc-label');
 
 function setObserver(lat, lon, label) {
-  observer = { lat: satellite.degreesToRadians(lat), lon: satellite.degreesToRadians(lon), alt: 0.1 };
+  observer = { latitude: satellite.degreesToRadians(lat), longitude: satellite.degreesToRadians(lon), height: 0.1 };
   observerLabel = label;
   locLabel.textContent = label;
   document.getElementById('dome-sub').textContent =
