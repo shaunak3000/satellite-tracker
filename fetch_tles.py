@@ -43,6 +43,19 @@ def categorize(name: str) -> str:
     return "Other"
 
 
+# Catalog objects that are not real (payload) satellites: fragmentation debris,
+# spent rocket bodies, and uncatalogued-origin objects. We don't surface these.
+def is_real_satellite(name: str) -> bool:
+    n = name.upper()
+    if "DEB" in n or "DEBRIS" in n:       # FENGYUN 1C DEB, COSMOS 2251 DEB, ...
+        return False
+    if "R/B" in n or "ROCKET BODY" in n:  # spent upper stages
+        return False
+    if "UNKNOWN" in n or "TBA" in n:      # uncatalogued / to-be-assigned
+        return False
+    return True
+
+
 def fetch_page(session: requests.Session, page: int) -> list[dict]:
     url = f"{IVAN_BASE}?page-size={PAGE_SIZE}&page={page}"
     r = session.get(url, timeout=30)
@@ -82,18 +95,23 @@ def main() -> None:
                 if i % 50 == 0 or i == total_pages:
                     print(f"  {i}/{total_pages} pages · {len(records):,} unique sats")
 
-        print(f"Done: {len(records):,} unique satellites ({errors} page errors)")
+        print(f"Done: {len(records):,} unique objects ({errors} page errors)")
 
-        # Step 3: build output
+        # Step 3: build output — real satellites only, with NORAD catalog id
         tles = [
             {
+                "norad":    item["satelliteId"],
                 "name":     item["name"],
                 "line1":    item["line1"],
                 "line2":    item["line2"],
                 "category": categorize(item["name"]),
             }
             for item in records.values()
+            if is_real_satellite(item["name"])
         ]
+
+        skipped = len(records) - len(tles)
+        print(f"Kept {len(tles):,} real satellites (filtered {skipped:,} debris/rocket-bodies)")
 
         output = {
             "fetched_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -105,7 +123,7 @@ def main() -> None:
             json.dump(output, f, separators=(",", ":"))
 
         size_kb = os.path.getsize(OUTPUT_PATH) / 1024
-        print(f"Saved {len(tles):,} satellites → {OUTPUT_PATH} ({size_kb:.0f} KB)")
+        print(f"Saved {len(tles):,} satellites -> {OUTPUT_PATH} ({size_kb:.0f} KB)")
 
 
 if __name__ == "__main__":

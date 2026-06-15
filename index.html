@@ -299,6 +299,7 @@
       <thead id="table-head">
         <tr>
           <th data-col="name">Satellite Name</th>
+          <th data-col="norad">NORAD ID</th>
           <th data-col="elevation">Elevation °</th>
           <th data-col="azimuth">Azimuth °</th>
           <th data-col="height_km">Altitude (km)</th>
@@ -325,8 +326,8 @@ let observer = {
 };
 let observerLabel = 'St Paul, MN (default)';
 
-const CACHE_KEY = 'sat_tle_cache';
-const CACHE_TTL = 4 * 3600 * 1000;   // 4 hours in ms
+const CACHE_KEY = 'sat_tle_cache_v2';   // v2: debris filtered out + NORAD id added
+const CACHE_TTL = 24 * 3600 * 1000;   // 24 hours in ms (data refreshes once daily)
 
 const CAT_COLORS = {
   ISS:      '#FFD700',
@@ -390,6 +391,17 @@ function categorize(name) {
   if (/\bGPS\b|NAVSTAR|GLONASS|GALILEO|BEIDOU|COMPASS/.test(n)) return 'GPS';
   if (/\bUSA\b|NROL|KH-|LACROSSE|ONYX|TRUMPET|KEYHOLE/.test(n)) return 'Military';
   return 'Other';
+}
+
+// Real (payload) satellites only — drop debris, spent rocket bodies, unknowns.
+// Mirrors is_real_satellite() in fetch_tles.py (used only on the fallback path;
+// the pre-built tles.json is already filtered server-side).
+function isRealSatellite(name) {
+  const n = (name || '').toUpperCase();
+  if (n.includes('DEB') || n.includes('DEBRIS')) return false;
+  if (n.includes('R/B') || n.includes('ROCKET BODY')) return false;
+  if (n.includes('UNKNOWN') || n.includes('TBA')) return false;
+  return true;
 }
 
 // ─── localStorage cache ────────────────────────────────────────────────────
@@ -456,8 +468,8 @@ async function fetchAllTLEs(onProgress) {
   }
 
   const tles = Object.values(records)
-    .filter(i => i.line1 && i.line2)
-    .map(i => ({ name: i.name, line1: i.line1, line2: i.line2, category: categorize(i.name) }));
+    .filter(i => i.line1 && i.line2 && isRealSatellite(i.name))
+    .map(i => ({ norad: i.satelliteId, name: i.name, line1: i.line1, line2: i.line2, category: categorize(i.name) }));
   saveCache(tles);
   onProgress(totalPages, totalPages, `Downloaded ${tles.length.toLocaleString()} satellites (fallback).`);
   return tles;
@@ -491,6 +503,7 @@ function computeOverhead(tles, minElevDeg) {
 
       results.push({
         name:       tle.name,
+        norad:      tle.norad || tle.line1.substring(2, 7).trim(),
         elevation:  Math.round(elevDeg * 10) / 10,
         azimuth:    Math.round(azDeg * 10) / 10,
         height_km:  Math.round(heightKm),
@@ -675,6 +688,7 @@ function updateTable(sats) {
   tableBody.innerHTML = sorted.map(s => `
     <tr>
       <td>${s.name}</td>
+      <td class="norad">${s.norad}</td>
       <td>${s.elevation}°</td>
       <td>${s.azimuth}°</td>
       <td>${s.height_km.toLocaleString()} km</td>
@@ -729,6 +743,7 @@ domeCanvas.addEventListener('mousemove', e => {
     tooltip.style.top   = (e.clientY - 10) + 'px';
     tooltip.innerHTML =
       `<strong>${hit.name}</strong><br>` +
+      `NORAD: ${hit.norad}<br>` +
       `Elevation: ${hit.elevation}°<br>` +
       `Azimuth: ${hit.azimuth}°<br>` +
       `Altitude: ${hit.height_km.toLocaleString()} km<br>` +

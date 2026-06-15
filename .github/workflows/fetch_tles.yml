@@ -2,7 +2,7 @@ name: Fetch TLE data
 
 on:
   schedule:
-    - cron: '0 */4 * * *'   # every 4 hours
+    - cron: '0 6 * * *'   # once daily at 06:00 UTC (upstream TLEs refresh ~1x/day)
   workflow_dispatch:        # manual trigger
 
 jobs:
