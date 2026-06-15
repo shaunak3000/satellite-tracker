@@ -439,7 +439,9 @@ async function fetchAllTLEs(onProgress) {
     const resp = await fetch('./tles.json');
     if (resp.ok) {
       const data = await resp.json();
-      const tles = data.tles;
+      // Filter client-side too, so debris never shows even if tles.json predates
+      // the server-side filter (e.g. an upstream-API outage stalled the refresh).
+      const tles = data.tles.filter(t => isRealSatellite(t.name));
       const age  = data.fetched_at ? ` · data from ${data.fetched_at.slice(0, 10)}` : '';
       onProgress(1, 1, `Loaded ${tles.length.toLocaleString()} satellites${age}`);
       saveCache(tles);
