@@ -282,6 +282,14 @@
     border-bottom: 1px solid var(--overlay);
   }
   .dd-nextpass { font-size: 0.85rem; margin-top: 10px; line-height: 1.6; color: var(--text); }
+  .np-lead { font-size: 0.85rem; color: var(--text); margin-bottom: 8px; }
+  .np-line { font-size: 0.85rem; margin: 4px 0; line-height: 1.5; }
+  .np-label { display: inline-block; min-width: 82px; color: var(--subtext); font-weight: 600; }
+  .np-note {
+    font-size: 0.75rem; color: var(--subtext); margin-top: 10px;
+    line-height: 1.45; font-style: italic;
+    border-top: 1px solid var(--overlay); padding-top: 8px;
+  }
 
   /* ── 3D view ─────────────────────────────────────────────────── */
   #three-toggle.active { background: var(--accent); color: #11111b; }
@@ -309,6 +317,14 @@
     padding: 6px 12px; cursor: pointer; font-size: 0.8rem;
   }
   #three-back:hover { background: #585b70; }
+  #three-filter {
+    position: absolute; top: 12px; right: 12px;
+    display: flex; align-items: center; gap: 6px;
+    background: rgba(17, 17, 27, 0.7); color: var(--text);
+    border: 1px solid var(--overlay); border-radius: 6px;
+    padding: 6px 10px; font-size: 0.8rem; cursor: pointer; user-select: none;
+  }
+  #three-filter input { accent-color: var(--accent); cursor: pointer; margin: 0; }
 
   @media (max-width: 700px) {
     #charts-row { grid-template-columns: 1fr; }
@@ -375,6 +391,9 @@
   <div id="three-wrap">
     <div id="three-mount"></div>
     <button id="three-back">↩ Back to globe</button>
+    <label id="three-filter" title="Show only the satellites matching the Min Elevation and category filters above">
+      <input type="checkbox" id="three-filter-cb"> Match filters above
+    </label>
     <div id="three-hint">Loading 3D…</div>
   </div>
 </div>
@@ -474,6 +493,7 @@ const domeCanvas  = document.getElementById('sky-dome-canvas');
     cb.addEventListener('change', () => {
       catEnabled[cat] = cb.checked;
       renderAll();
+      if (three && three.raf && three.filtered) updateSatPoints(true);
     });
     label.appendChild(cb);
     label.appendChild(document.createTextNode(cat));
@@ -945,6 +965,15 @@ function computeNextPass(line1, line2, fromDate) {
   return { state: 'none' };
 }
 
+const COMPASS_8 = ['north', 'northeast', 'east', 'southeast', 'south', 'southwest', 'west', 'northwest'];
+function compassWord(az) { return COMPASS_8[Math.round(az / 45) % 8]; }
+function elevPhrase(deg) {
+  if (deg < 15) return 'stays low in the sky';
+  if (deg < 40) return 'partway up';
+  if (deg < 70) return 'high in the sky';
+  return 'nearly straight overhead';
+}
+
 function formatPass(data, now) {
   const t   = d => d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
   const rel = d => {
@@ -953,19 +982,32 @@ function formatPass(data, now) {
     if (m < 60) return `in ${m} min`;
     return `in ${Math.floor(m / 60)}h ${m % 60}m`;
   };
+  const line = (label, body) => `<div class="np-line"><span class="np-label">${label}</span> ${body}</div>`;
+  const elevNote = 'Elevation is the angle above the horizon: 0° = on the horizon, 90° = straight up.';
+
   switch (data.state) {
     case 'overhead':
-      return `<strong>Overhead now</strong> · peak ${data.peak}°<br>Sets ${t(data.set)} (${rel(data.set)})`;
+      return `<div class="np-lead">It's crossing your sky right now.</div>` +
+        line('Highest', `${data.peak}° above the horizon — ${elevPhrase(data.peak)}`) +
+        line('Sets', `${t(data.set)} (${rel(data.set)})`) +
+        `<div class="np-note">${elevNote}</div>`;
     case 'upcoming': {
-      const dir = `${compass(data.azRise)} → ${data.azSet != null ? compass(data.azSet) : '?'}`;
-      const dur = data.set ? ` · ${Math.max(1, Math.round((data.set - data.rise) / 60000))} min` : '';
-      const set = data.set ? ` · sets ${t(data.set)}` : '';
-      return `<strong>Rises ${t(data.rise)}</strong> (${rel(data.rise)})<br>${dir} · peak ${data.peak}°${dur}${set}`;
+      const setLines = data.set
+        ? line('Disappears', `${t(data.set)} into the ${compassWord(data.azSet)}`) +
+          line('Visible for', `about ${Math.max(1, Math.round((data.set - data.rise) / 60000))} minutes`)
+        : '';
+      return `<div class="np-lead">The next time this satellite passes over your location:</div>` +
+        line('Appears', `${t(data.rise)} (${rel(data.rise)}), low in the ${compassWord(data.azRise)}`) +
+        line('Highest', `${data.peak}° above the horizon — ${elevPhrase(data.peak)}`) +
+        setLines +
+        `<div class="np-note">Face ${compassWord(data.azRise)} as it rises. ${elevNote}</div>`;
     }
     case 'always':
-      return `Continuously above ${PASS_MIN_ELEV}° (e.g. geostationary)`;
+      return `<div class="np-lead">Always in view from your location.</div>` +
+        `<div class="np-note">This satellite never sets — it stays above your horizon continuously, which is typical of a geostationary satellite parked over the equator.</div>`;
     default:
-      return `No pass above ${PASS_MIN_ELEV}° in the next 36 h`;
+      return `<div class="np-lead">No pass in the next 36 hours.</div>` +
+        `<div class="np-note">It won't climb above ${PASS_MIN_ELEV}° over your location during that window — from this latitude it may stay permanently below your horizon (common for geostationary satellites).</div>`;
   }
 }
 
@@ -1062,6 +1104,7 @@ elevSlider.addEventListener('input', () => {
   elevSlider.value = snapped;
   elevVal.textContent = `${snapped}°`;
   if (allTLEs.length) renderAll();
+  if (three && three.raf && three.filtered) updateSatPoints(true);
 });
 
 refreshBtn.addEventListener('click', () => {
@@ -1126,6 +1169,7 @@ locateBtn.addEventListener('click', () => {
 // ─── 3D view (Three.js, lazy-loaded on first open) ──────────────────────────
 const SCALE3D = 1 / 1000;                 // km → scene units
 const EARTH_R = 6371 * SCALE3D;           // ≈ 6.371 units
+let EARTH_TEX_OFFSET = 0;                 // radians — aligns the texture's longitude to the ECEF frame
 let three = null;
 let threeLib = false;
 const _catColor3D = {};
@@ -1168,14 +1212,25 @@ function initThree(mount) {
   renderer.setSize(W, H);
   mount.appendChild(renderer.domElement);
 
-  // Procedural Earth: ocean sphere + lat/lon graticule + faint atmosphere
-  scene.add(new THREE.Mesh(
-    new THREE.SphereGeometry(EARTH_R, 48, 48),
-    new THREE.MeshPhongMaterial({ color: 0x16314f, emissive: 0x060f1c, shininess: 6 })
-  ));
+  // Textured Earth (NASA Blue Marble via jsDelivr) + faint graticule + atmosphere
+  const TEX = 'https://cdn.jsdelivr.net/gh/mrdoob/three.js@r134/examples/textures/planets/';
+  const texLoader = new THREE.TextureLoader();
+  texLoader.setCrossOrigin('anonymous');
+  const earthMesh = new THREE.Mesh(
+    new THREE.SphereGeometry(EARTH_R, 64, 64),
+    new THREE.MeshPhongMaterial({
+      map: texLoader.load(TEX + 'earth_atmos_2048.jpg'),
+      specularMap: texLoader.load(TEX + 'earth_specular_2048.jpg'),
+      specular: new THREE.Color(0x444444),
+      shininess: 14,
+      color: 0xffffff,
+    })
+  );
+  earthMesh.rotation.y = EARTH_TEX_OFFSET;
+  scene.add(earthMesh);
   scene.add(new THREE.LineSegments(
-    new THREE.WireframeGeometry(new THREE.SphereGeometry(EARTH_R * 1.001, 24, 16)),
-    new THREE.LineBasicMaterial({ color: 0x2b4a6b, transparent: true, opacity: 0.35 })
+    new THREE.WireframeGeometry(new THREE.SphereGeometry(EARTH_R * 1.002, 24, 16)),
+    new THREE.LineBasicMaterial({ color: 0x6b86a8, transparent: true, opacity: 0.12 })
   ));
   scene.add(new THREE.Mesh(
     new THREE.SphereGeometry(EARTH_R * 1.025, 48, 48),
@@ -1210,8 +1265,8 @@ function initThree(mount) {
   controls.target.set(0, 0, 0); controls.update();
 
   three = {
-    scene, camera, renderer, controls, points, pin, highlight, obsPos, mount,
-    mode: 'globe', lastUpdate: 0, pointIndex: [], tween: null, raf: null,
+    scene, camera, renderer, controls, points, pin, highlight, obsPos, mount, earth: earthMesh,
+    mode: 'globe', filtered: false, lastUpdate: 0, pointIndex: [], tween: null, raf: null,
     satrecs: buildSatrecs(),
   };
 
@@ -1239,16 +1294,20 @@ function updateSatPoints(force) {
   const gmst = satellite.gstime(date);
   const obs = satellite.geodeticToEcf(observer);
   const planetarium = three.mode === 'planetarium';
+  const filtered = three.filtered;
+  const minElev = filtered ? parseInt(elevSlider.value) : 0;
 
   const pos = [], col = [], idx = [];
   for (let i = 0; i < three.satrecs.length; i++) {
     const sr = three.satrecs[i]; if (!sr) continue;
+    if (filtered && !catEnabled[allTLEs[i].category]) continue;   // category filter
     const pv = satellite.propagate(sr, date);
     if (!pv || !pv.position) continue;
     const e = satellite.eciToEcf(pv.position, gmst);
     const r = Math.hypot(e.x, e.y, e.z);
     if (!isFinite(r) || r > 200000) continue;
     if (planetarium && ((e.x - obs.x) * obs.x + (e.y - obs.y) * obs.y + (e.z - obs.z) * obs.z) <= 0) continue;
+    if (filtered && satellite.radiansToDegrees(satellite.ecfToLookAngles(observer, e).elevation) < minElev) continue;
     const v = toThree(e);
     pos.push(v.x, v.y, v.z);
     const c = catColor3D(allTLEs[i].category);
@@ -1363,6 +1422,9 @@ window.addEventListener('resize', resizeThree);
   const btn = document.getElementById('three-toggle');
   const section = document.getElementById('three-section');
   document.getElementById('three-back').addEventListener('click', enterGlobe);
+  document.getElementById('three-filter-cb').addEventListener('change', e => {
+    if (three) { three.filtered = e.target.checked; updateSatPoints(true); }
+  });
   btn.addEventListener('click', async () => {
     if (section.style.display === 'block') {
       section.style.display = 'none'; btn.classList.remove('active');
