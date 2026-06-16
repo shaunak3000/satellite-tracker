@@ -283,6 +283,33 @@
   }
   .dd-nextpass { font-size: 0.85rem; margin-top: 10px; line-height: 1.6; color: var(--text); }
 
+  /* ── 3D view ─────────────────────────────────────────────────── */
+  #three-toggle.active { background: var(--accent); color: #11111b; }
+  #three-section { display: none; padding: 0 20px 8px; }
+  #three-wrap {
+    position: relative;
+    border: 1px solid var(--overlay);
+    border-radius: 8px;
+    overflow: hidden;
+    background: #0b0b14;
+  }
+  #three-mount { width: 100%; height: 520px; }
+  #three-mount canvas { display: block; cursor: grab; }
+  #three-mount canvas:active { cursor: grabbing; }
+  #three-hint {
+    position: absolute; left: 12px; right: 12px; bottom: 10px;
+    font-size: 0.78rem; color: var(--subtext); line-height: 1.4;
+    background: rgba(17, 17, 27, 0.66); padding: 6px 10px; border-radius: 6px;
+    pointer-events: none;
+  }
+  #three-back {
+    position: absolute; top: 12px; left: 12px; display: none;
+    background: var(--overlay); color: var(--text);
+    border: 1px solid var(--subtext); border-radius: 6px;
+    padding: 6px 12px; cursor: pointer; font-size: 0.8rem;
+  }
+  #three-back:hover { background: #585b70; }
+
   @media (max-width: 700px) {
     #charts-row { grid-template-columns: 1fr; }
     #detail-drawer {
@@ -320,6 +347,7 @@
     <button id="locate-btn">⊙ Use My Location</button>
     <span id="loc-label">St Paul, MN (default)</span>
   </div>
+  <button id="three-toggle">🛰 3D View</button>
   <button id="refresh-btn">↺ Refresh</button>
 </div>
 
@@ -340,6 +368,14 @@
     <p class="chart-sub" id="scatter-sub">Altitude above ground vs. lateral (ground) distance from St Paul, MN. Each dot is a satellite.</p>
     <div id="scatter-wrap"><canvas id="scatter-canvas"></canvas></div>
     <div class="legend" id="scatter-legend"></div>
+  </div>
+</div>
+
+<div id="three-section">
+  <div id="three-wrap">
+    <div id="three-mount"></div>
+    <button id="three-back">↩ Back to globe</button>
+    <div id="three-hint">Loading 3D…</div>
   </div>
 </div>
 
@@ -825,6 +861,7 @@ function selectSat(norad) {
   renderDrawer();
   drawSkyDome(overhead);   // redraw to add/remove the selection ring
   updateTable(overhead);   // reapply the selected-row highlight
+  update3DHighlight();     // move the 3D selection marker (no-op if 3D not open)
 }
 
 function clearSelection() {
@@ -832,6 +869,7 @@ function clearSelection() {
   renderDrawer();
   drawSkyDome(overhead);
   updateTable(overhead);
+  update3DHighlight();
 }
 
 function ddRow(k, v) { return `<dt>${k}</dt><dd>${v}</dd>`; }
@@ -1055,6 +1093,7 @@ function setObserver(lat, lon, label) {
     scatterChart.update('none');
   }
   if (allTLEs.length) renderAll();
+  update3DObserver();
 }
 
 locateBtn.addEventListener('click', () => {
@@ -1083,6 +1122,264 @@ locateBtn.addEventListener('click', () => {
     { timeout: 8000, maximumAge: 300000 }
   );
 });
+
+// ─── 3D view (Three.js, lazy-loaded on first open) ──────────────────────────
+const SCALE3D = 1 / 1000;                 // km → scene units
+const EARTH_R = 6371 * SCALE3D;           // ≈ 6.371 units
+let three = null;
+let threeLib = false;
+const _catColor3D = {};
+
+function toThree(ecef) {                   // ECEF km → scene space (Z-north → Y-up)
+  return new THREE.Vector3(ecef.x * SCALE3D, ecef.z * SCALE3D, -ecef.y * SCALE3D);
+}
+function catColor3D(cat) {
+  if (!_catColor3D[cat]) _catColor3D[cat] = new THREE.Color(CAT_COLORS[cat] || '#888aaa');
+  return _catColor3D[cat];
+}
+
+function loadThree() {
+  return new Promise((resolve, reject) => {
+    if (threeLib || window.THREE) { resolve(); return; }
+    const add = src => new Promise((res, rej) => {
+      const s = document.createElement('script');
+      s.src = src; s.onload = res; s.onerror = () => rej(new Error('load ' + src));
+      document.head.appendChild(s);
+    });
+    add('https://unpkg.com/three@0.134.0/build/three.min.js')
+      .then(() => add('https://unpkg.com/three@0.134.0/examples/js/controls/OrbitControls.js'))
+      .then(() => { threeLib = true; resolve(); })
+      .catch(reject);
+  });
+}
+
+function buildSatrecs() {
+  return allTLEs.map(t => { try { return satellite.twoline2satrec(t.line1, t.line2); } catch (e) { return null; } });
+}
+
+function initThree(mount) {
+  const W = mount.clientWidth || 800, H = 520;
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x0b0b14);
+
+  const camera = new THREE.PerspectiveCamera(45, W / H, 0.01, 5000);
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setPixelRatio(window.devicePixelRatio || 1);
+  renderer.setSize(W, H);
+  mount.appendChild(renderer.domElement);
+
+  // Procedural Earth: ocean sphere + lat/lon graticule + faint atmosphere
+  scene.add(new THREE.Mesh(
+    new THREE.SphereGeometry(EARTH_R, 48, 48),
+    new THREE.MeshPhongMaterial({ color: 0x16314f, emissive: 0x060f1c, shininess: 6 })
+  ));
+  scene.add(new THREE.LineSegments(
+    new THREE.WireframeGeometry(new THREE.SphereGeometry(EARTH_R * 1.001, 24, 16)),
+    new THREE.LineBasicMaterial({ color: 0x2b4a6b, transparent: true, opacity: 0.35 })
+  ));
+  scene.add(new THREE.Mesh(
+    new THREE.SphereGeometry(EARTH_R * 1.025, 48, 48),
+    new THREE.MeshBasicMaterial({ color: 0x2a6cff, transparent: true, opacity: 0.07, side: THREE.BackSide })
+  ));
+  scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+  const sun = new THREE.DirectionalLight(0xffffff, 0.9); sun.position.set(5, 3, 5); scene.add(sun);
+
+  const obsPos = toThree(satellite.geodeticToEcf(observer));
+  const pin = new THREE.Mesh(
+    new THREE.SphereGeometry(EARTH_R * 0.012, 12, 12),
+    new THREE.MeshBasicMaterial({ color: 0xffffff })
+  );
+  pin.position.copy(obsPos); scene.add(pin);
+
+  const points = new THREE.Points(
+    new THREE.BufferGeometry(),
+    new THREE.PointsMaterial({ size: EARTH_R * 0.013, vertexColors: true, sizeAttenuation: true })
+  );
+  scene.add(points);
+
+  const highlight = new THREE.Mesh(
+    new THREE.SphereGeometry(EARTH_R * 0.022, 16, 16),
+    new THREE.MeshBasicMaterial({ color: 0xffffff, wireframe: true })
+  );
+  highlight.visible = false; scene.add(highlight);
+
+  const controls = new THREE.OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true; controls.dampingFactor = 0.08;
+  controls.minDistance = EARTH_R * 1.2; controls.maxDistance = EARTH_R * 40;
+  camera.position.set(0, EARTH_R * 0.8, EARTH_R * 3.2);
+  controls.target.set(0, 0, 0); controls.update();
+
+  three = {
+    scene, camera, renderer, controls, points, pin, highlight, obsPos, mount,
+    mode: 'globe', lastUpdate: 0, pointIndex: [], tween: null, raf: null,
+    satrecs: buildSatrecs(),
+  };
+
+  renderer.domElement.addEventListener('click', onThreeClick);
+  document.getElementById('three-hint').textContent =
+    'Globe — drag to orbit Earth, scroll to zoom, click a satellite to select. Click the white pin to drop into your sky.';
+  updateSatPoints(true);
+  animateThree();
+}
+
+function update3DObserver() {
+  if (!three) return;
+  three.obsPos = toThree(satellite.geodeticToEcf(observer));
+  three.pin.position.copy(three.obsPos);
+  three.satrecs = buildSatrecs();
+}
+
+function updateSatPoints(force) {
+  if (!three) return;
+  const t = Date.now();
+  if (!force && t - three.lastUpdate < 1500) return;
+  three.lastUpdate = t;
+
+  const date = new Date();
+  const gmst = satellite.gstime(date);
+  const obs = satellite.geodeticToEcf(observer);
+  const planetarium = three.mode === 'planetarium';
+
+  const pos = [], col = [], idx = [];
+  for (let i = 0; i < three.satrecs.length; i++) {
+    const sr = three.satrecs[i]; if (!sr) continue;
+    const pv = satellite.propagate(sr, date);
+    if (!pv || !pv.position) continue;
+    const e = satellite.eciToEcf(pv.position, gmst);
+    const r = Math.hypot(e.x, e.y, e.z);
+    if (!isFinite(r) || r > 200000) continue;
+    if (planetarium && ((e.x - obs.x) * obs.x + (e.y - obs.y) * obs.y + (e.z - obs.z) * obs.z) <= 0) continue;
+    const v = toThree(e);
+    pos.push(v.x, v.y, v.z);
+    const c = catColor3D(allTLEs[i].category);
+    col.push(c.r, c.g, c.b);
+    idx.push(i);
+  }
+  const g = three.points.geometry;
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  g.computeBoundingSphere();
+  three.pointIndex = idx;
+  update3DHighlight();
+}
+
+function update3DHighlight() {
+  if (!three) return;
+  let shown = false;
+  if (selectedNorad) {
+    const si = allTLEs.findIndex(t2 => String(t2.norad) === selectedNorad);
+    const sr = si >= 0 ? three.satrecs[si] : null;
+    if (sr) {
+      const date = new Date();
+      const pv = satellite.propagate(sr, date);
+      if (pv && pv.position) {
+        three.highlight.position.copy(toThree(satellite.eciToEcf(pv.position, satellite.gstime(date))));
+        shown = true;
+      }
+    }
+  }
+  three.highlight.visible = shown;
+}
+
+function onThreeClick(ev) {
+  if (!three || three.tween) return;
+  const rect = three.renderer.domElement.getBoundingClientRect();
+  const m = new THREE.Vector2(
+    ((ev.clientX - rect.left) / rect.width) * 2 - 1,
+    -((ev.clientY - rect.top) / rect.height) * 2 + 1
+  );
+  const ray = new THREE.Raycaster();
+  ray.params.Points.threshold = EARTH_R * 0.025;
+  ray.setFromCamera(m, three.camera);
+  const hit = ray.intersectObject(three.points);
+  if (hit.length) {
+    const i = three.pointIndex[hit[0].index];
+    if (allTLEs[i]) selectSat(allTLEs[i].norad);
+    return;
+  }
+  if (three.mode === 'globe' && ray.intersectObject(three.pin).length) enterPlanetarium();
+}
+
+function tweenCamera(toPos, toTarget, dur, done) {
+  three.controls.enabled = false;
+  three.tween = {
+    fromPos: three.camera.position.clone(), toPos: toPos.clone(),
+    fromTar: three.controls.target.clone(), toTar: toTarget.clone(),
+    start: performance.now(), dur, done,
+  };
+}
+
+function enterPlanetarium() {
+  if (!three) return;
+  three.mode = 'planetarium';
+  const up = three.obsPos.clone().normalize();
+  three.camera.up.copy(up);
+  const camPos = three.obsPos.clone().add(up.clone().multiplyScalar(EARTH_R * 0.01));
+  const target = three.obsPos.clone().add(up.clone().multiplyScalar(EARTH_R * 2));
+  three.controls.minDistance = EARTH_R * 0.004;
+  three.controls.maxDistance = EARTH_R * 4;
+  tweenCamera(camPos, target, 1300, () => updateSatPoints(true));
+  document.getElementById('three-back').style.display = 'inline-block';
+  document.getElementById('three-hint').textContent =
+    'Planetarium — drag to look around your sky. Only satellites above your horizon are shown. Click one to select.';
+}
+
+function enterGlobe() {
+  if (!three) return;
+  three.mode = 'globe';
+  three.camera.up.set(0, 1, 0);
+  three.controls.minDistance = EARTH_R * 1.2;
+  three.controls.maxDistance = EARTH_R * 40;
+  tweenCamera(new THREE.Vector3(0, EARTH_R * 0.8, EARTH_R * 3.2), new THREE.Vector3(0, 0, 0), 1300, () => updateSatPoints(true));
+  document.getElementById('three-back').style.display = 'none';
+  document.getElementById('three-hint').textContent =
+    'Globe — drag to orbit Earth, scroll to zoom, click a satellite to select. Click the white pin to drop into your sky.';
+}
+
+function animateThree() {
+  if (!three) return;
+  three.raf = requestAnimationFrame(animateThree);
+  if (three.tween) {
+    const k = Math.min(1, (performance.now() - three.tween.start) / three.tween.dur);
+    const e = k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;   // easeInOutQuad
+    three.camera.position.lerpVectors(three.tween.fromPos, three.tween.toPos, e);
+    three.controls.target.lerpVectors(three.tween.fromTar, three.tween.toTar, e);
+    if (k >= 1) { const d = three.tween.done; three.tween = null; three.controls.enabled = true; if (d) d(); }
+  }
+  updateSatPoints(false);
+  three.controls.update();
+  three.renderer.render(three.scene, three.camera);
+}
+
+function resizeThree() {
+  if (!three) return;
+  const W = three.mount.clientWidth, H = 520;
+  three.camera.aspect = W / H; three.camera.updateProjectionMatrix();
+  three.renderer.setSize(W, H);
+}
+window.addEventListener('resize', resizeThree);
+
+(() => {
+  const btn = document.getElementById('three-toggle');
+  const section = document.getElementById('three-section');
+  document.getElementById('three-back').addEventListener('click', enterGlobe);
+  btn.addEventListener('click', async () => {
+    if (section.style.display === 'block') {
+      section.style.display = 'none'; btn.classList.remove('active');
+      if (three && three.raf) { cancelAnimationFrame(three.raf); three.raf = null; }
+      return;
+    }
+    section.style.display = 'block'; btn.classList.add('active');
+    section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    try {
+      await loadThree();
+      if (!three) initThree(document.getElementById('three-mount'));
+      else { resizeThree(); if (!three.raf) animateThree(); }
+    } catch (e) {
+      document.getElementById('three-hint').textContent = 'Could not load the 3D library (offline?).';
+    }
+  });
+})();
 
 // ─── Main init ───────────────────────────────────────────────────────────────
 async function init() {
