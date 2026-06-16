@@ -90,12 +90,22 @@ def main() -> None:
         print("enrich: no tles.json found; nothing to do")
         return
 
-    creds = parse_creds(os.environ.get("SPACE_TRACK_CREDS", ""))
-    if not creds:
-        print("enrich: SPACE_TRACK_CREDS missing or unparseable; leaving tles.json unchanged")
-        return
-    user, password = creds
-    print(f"enrich: logging in to Space-Track as {user[:3]}***")
+    # Preferred: two explicit secrets (no parsing ambiguity). Falls back to the
+    # combined SPACE_TRACK_CREDS for backwards compatibility.
+    identity = os.environ.get("SPACE_TRACK_IDENTITY", "").strip()
+    password = os.environ.get("SPACE_TRACK_PASSWORD", "")
+    if identity and password:
+        creds = (identity, password)
+        print("enrich: using SPACE_TRACK_IDENTITY / SPACE_TRACK_PASSWORD")
+    else:
+        raw = os.environ.get("SPACE_TRACK_CREDS", "")
+        creds = parse_creds(raw)
+        if not creds:
+            print("enrich: no usable Space-Track credentials; leaving tles.json unchanged")
+            return
+        # Safe diagnostics only — never print credential characters (logs are public)
+        nonblank = len([x for x in raw.splitlines() if x.strip()])
+        print(f"enrich: parsed SPACE_TRACK_CREDS (nonblank_lines={nonblank}, has_at={'@' in raw})")
 
     with open(TLES_PATH, encoding="utf-8") as f:
         data = json.load(f)
@@ -104,20 +114,27 @@ def main() -> None:
         print("enrich: tles.json has no records; nothing to do")
         return
 
-    try:
-        with requests.Session() as s:
-            s.headers["User-Agent"] = "satellite-tracker-enrich/1.0"
-            resp = s.post(LOGIN_URL, data={"identity": user, "password": password}, timeout=60)
-            resp.raise_for_status()
-            sat = s.get(SATCAT_URL, timeout=180)
-            sat.raise_for_status()
-            rows = sat.json()
-    except (requests.RequestException, json.JSONDecodeError) as e:
-        print(f"enrich: Space-Track request failed ({e}); leaving tles.json unchanged")
-        return
+    def fetch_satcat(identity, password):
+        try:
+            with requests.Session() as s:
+                s.headers["User-Agent"] = "satellite-tracker-enrich/1.0"
+                s.post(LOGIN_URL, data={"identity": identity, "password": password}, timeout=60)
+                sat = s.get(SATCAT_URL, timeout=180)
+                if sat.status_code != 200:
+                    return None
+                rows = sat.json()
+                return rows if isinstance(rows, list) else None
+        except (requests.RequestException, json.JSONDecodeError):
+            return None
 
-    if not isinstance(rows, list):
-        print(f"enrich: unexpected response (login likely failed): {str(rows)[:120]}")
+    a, b = creds
+    rows = fetch_satcat(a, b)
+    if rows is None:
+        # Tolerate reversed line/field order (e.g. password before username)
+        print("enrich: first credential order failed; trying reversed order")
+        rows = fetch_satcat(b, a)
+    if rows is None:
+        print("enrich: Space-Track login/query failed (check the secret); leaving tles.json unchanged")
         return
     print(f"enrich: fetched {len(rows):,} SATCAT rows")
 

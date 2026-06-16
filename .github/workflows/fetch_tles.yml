@@ -29,6 +29,8 @@ jobs:
 
       - name: Enrich with Space-Track SATCAT (country, launch date)
         env:
+          SPACE_TRACK_IDENTITY: ${{ secrets.SPACE_TRACK_IDENTITY }}
+          SPACE_TRACK_PASSWORD: ${{ secrets.SPACE_TRACK_PASSWORD }}
           SPACE_TRACK_CREDS: ${{ secrets.SPACE_TRACK_CREDS }}
         run: python enrich_satcat.py
 
