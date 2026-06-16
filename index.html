@@ -839,6 +839,98 @@ function ddRow(k, v) { return `<dt>${k}</dt><dd>${v}</dd>`; }
 const COMPASS_16 = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
 function compass(az) { return COMPASS_16[Math.round(az / 22.5) % 16]; }
 
+// ─── Next-pass prediction ───────────────────────────────────────────────────
+const PASS_MIN_ELEV = 10;   // degrees — threshold for a "meaningful" visible pass
+let passCache = { norad: null, data: null };
+
+function lookAt(satrec, t) {
+  const date = new Date(t);
+  const pv = satellite.propagate(satrec, date);
+  if (!pv || !pv.position) return null;
+  const gmst = satellite.gstime(date);
+  const look = satellite.ecfToLookAngles(observer, satellite.eciToEcf(pv.position, gmst));
+  return {
+    elev: satellite.radiansToDegrees(look.elevation),
+    az:   (satellite.radiansToDegrees(look.azimuth) + 360) % 360,
+  };
+}
+
+// Step the orbit forward to find the next pass above PASS_MIN_ELEV. Returns:
+//   {state:'overhead', set, peak} · {state:'upcoming', rise, set, peak, azRise, azSet}
+//   {state:'always'} (continuously up, e.g. GEO overhead) · {state:'none'}
+function computeNextPass(line1, line2, fromDate) {
+  let satrec;
+  try { satrec = satellite.twoline2satrec(line1, line2); } catch (e) { return { state: 'none' }; }
+
+  const STEP = 60 * 1000, WINDOW = 36 * 3600 * 1000;
+  const start = fromDate.getTime(), end = start + WINDOW;
+
+  const first = lookAt(satrec, start);
+  if (!first) return { state: 'none' };
+  const startedAbove = first.elev >= PASS_MIN_ELEV;
+
+  let prev = first, prevT = start;
+  let riseT = startedAbove ? start : null;
+  let azRise = startedAbove ? first.az : null;
+  let peak = first.elev, everAbove = startedAbove, everBelow = !startedAbove;
+
+  for (let t = start + STEP; t <= end; t += STEP) {
+    const cur = lookAt(satrec, t);
+    if (!cur) { prev = null; prevT = t; continue; }
+    if (cur.elev >= PASS_MIN_ELEV) everAbove = true; else everBelow = true;
+    if (riseT !== null && cur.elev > peak) peak = cur.elev;
+
+    if (prev) {
+      // rise crossing
+      if (riseT === null && prev.elev < PASS_MIN_ELEV && cur.elev >= PASS_MIN_ELEV) {
+        const f = (PASS_MIN_ELEV - prev.elev) / (cur.elev - prev.elev);
+        riseT = prevT + f * STEP; azRise = cur.az; peak = cur.elev;
+      }
+      // set crossing (only meaningful after a rise)
+      if (riseT !== null && prev.elev >= PASS_MIN_ELEV && cur.elev < PASS_MIN_ELEV) {
+        const f = (prev.elev - PASS_MIN_ELEV) / (prev.elev - cur.elev);
+        const setT = prevT + f * STEP;
+        if (startedAbove && riseT === start)
+          return { state: 'overhead', set: new Date(setT), peak: Math.round(peak) };
+        return { state: 'upcoming', rise: new Date(riseT), set: new Date(setT),
+                 peak: Math.round(peak), azRise, azSet: prev.az };
+      }
+    }
+    prev = cur; prevT = t;
+  }
+
+  if (riseT !== null) {   // rose/started up but never set within the window
+    if (startedAbove) return { state: 'always' };
+    return { state: 'upcoming', rise: new Date(riseT), set: null, peak: Math.round(peak), azRise, azSet: null };
+  }
+  if (everAbove && !everBelow) return { state: 'always' };
+  return { state: 'none' };
+}
+
+function formatPass(data, now) {
+  const t   = d => d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  const rel = d => {
+    const m = Math.round((d.getTime() - now.getTime()) / 60000);
+    if (m <= 0) return 'now';
+    if (m < 60) return `in ${m} min`;
+    return `in ${Math.floor(m / 60)}h ${m % 60}m`;
+  };
+  switch (data.state) {
+    case 'overhead':
+      return `<strong>Overhead now</strong> · peak ${data.peak}°<br>Sets ${t(data.set)} (${rel(data.set)})`;
+    case 'upcoming': {
+      const dir = `${compass(data.azRise)} → ${data.azSet != null ? compass(data.azSet) : '?'}`;
+      const dur = data.set ? ` · ${Math.max(1, Math.round((data.set - data.rise) / 60000))} min` : '';
+      const set = data.set ? ` · sets ${t(data.set)}` : '';
+      return `<strong>Rises ${t(data.rise)}</strong> (${rel(data.rise)})<br>${dir} · peak ${data.peak}°${dur}${set}`;
+    }
+    case 'always':
+      return `Continuously above ${PASS_MIN_ELEV}° (e.g. geostationary)`;
+    default:
+      return `No pass above ${PASS_MIN_ELEV}° in the next 36 h`;
+  }
+}
+
 function renderDrawer() {
   if (!selectedNorad) {
     drawer.classList.remove('open');
@@ -871,7 +963,16 @@ function renderDrawer() {
     statusEl.textContent = 'Below horizon now';
     grid.innerHTML = '';
   }
-  document.getElementById('dd-nextpass').textContent = '—';   // filled in Step 2
+  const npEl = document.getElementById('dd-nextpass');
+  if (base) {
+    const now = new Date();
+    const stale = passCache.data && passCache.data.set && passCache.data.set.getTime() < now.getTime();
+    if (passCache.norad !== selectedNorad || stale)
+      passCache = { norad: selectedNorad, data: computeNextPass(base.line1, base.line2, now) };
+    npEl.innerHTML = formatPass(passCache.data, now);
+  } else {
+    npEl.textContent = '—';
+  }
   drawer.classList.add('open');
   drawer.setAttribute('aria-hidden', 'false');
 }
@@ -994,7 +1095,10 @@ async function init() {
   }
 
   try {
-    allTLEs = await fetchAllTLEs(onProgress);
+    const loaded = await fetchAllTLEs(onProgress);
+    // Normalize NORAD onto every record (older tles.json / caches lack the field;
+    // derive it from line1 cols 3-7) so selection + next-pass work on any data.
+    allTLEs = loaded.map(t => ({ ...t, norad: t.norad ?? t.line1.substring(2, 7).trim() }));
     loadBarWrap.style.display = 'none';
     renderAll();
   } catch(e) {
