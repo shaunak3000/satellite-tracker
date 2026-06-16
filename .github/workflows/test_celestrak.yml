@@ -1,0 +1,32 @@
+name: Test CelesTrak reachability
+on: workflow_dispatch
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: GP active (TLE lines)
+        run: |
+          echo "== celestrak gp active (FORMAT=tle) =="
+          curl -s -m 40 -A "satellite-tracker-test/1.0" -o /tmp/gp.txt \
+            -w "HTTP %{http_code}, %{size_download} bytes\n" \
+            "https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=tle"
+          echo "lines: $(wc -l < /tmp/gp.txt)"
+          head -3 /tmp/gp.txt
+
+      - name: GP active (JSON)
+        run: |
+          echo "== celestrak gp active (FORMAT=json) =="
+          curl -s -m 40 -A "satellite-tracker-test/1.0" -o /tmp/gp.json \
+            -w "HTTP %{http_code}, %{size_download} bytes\n" \
+            "https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=json"
+          python3 -c "import json;d=json.load(open('/tmp/gp.json'));print('records:',len(d));print('keys:',list(d[0].keys())[:12])" 2>&1 | head
+
+      - name: SATCAT csv
+        run: |
+          echo "== celestrak satcat.csv =="
+          curl -s -m 60 -A "satellite-tracker-test/1.0" -o /tmp/satcat.csv \
+            -w "HTTP %{http_code}, %{size_download} bytes\n" \
+            "https://celestrak.org/pub/satcat.csv"
+          echo "lines: $(wc -l < /tmp/satcat.csv)"
+          head -2 /tmp/satcat.csv
