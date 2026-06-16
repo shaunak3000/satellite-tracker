@@ -446,7 +446,7 @@ let observer = {
 };
 let observerLabel = 'St Paul, MN (default)';
 
-const CACHE_KEY = 'sat_tle_cache_v3';   // v3: + country / launch-date metadata
+const CACHE_KEY = 'sat_tle_cache_v4';   // v4: CelesTrak source + full SATCAT metadata
 const CACHE_TTL = 24 * 3600 * 1000;   // 24 hours in ms (data refreshes once daily)
 
 const CAT_COLORS = {
@@ -1043,17 +1043,31 @@ function renderDrawer() {
   catEl.textContent = meta.category;
   catEl.style.color = color;
 
-  // About: launch (from TLE) + any SATCAT/UCS fields merged into the record
+  // About: launch (from TLE) + any SATCAT fields merged into the record
   const rec = base || live;
   const li = launchInfo(rec && rec.line1);
   const about = [];
-  if (rec && rec.launchDate) about.push(ddRow('Launched', `${rec.launchDate}${li ? ' · ' + li.designator : ''}`));
-  else if (li) about.push(ddRow('Launched', `${li.year} · ${li.designator}`));
-  if (rec && rec.country)    about.push(ddRow('Country', rec.country));
-  if (rec && rec.operator)   about.push(ddRow('Operator', rec.operator));
-  if (rec && rec.purpose)    about.push(ddRow('Purpose', rec.purpose));
-  if (rec && rec.objectType) about.push(ddRow('Type', rec.objectType));
-  document.getElementById('dd-about').innerHTML = about.join('') || ddRow('Launched', 'unknown');
+  if (rec) {
+    if (rec.status)    about.push(ddRow('Status', rec.status));
+    if (rec.country)   about.push(ddRow('Country', rec.country));
+    if (rec.operator)  about.push(ddRow('Operator', rec.operator));
+    if (rec.purpose)   about.push(ddRow('Purpose', rec.purpose));
+    if (rec.launchDate) about.push(ddRow('Launched', `${rec.launchDate}${li ? ' · ' + li.designator : ''}`));
+    else if (li)        about.push(ddRow('Launched', `${li.year} · ${li.designator}`));
+    if (rec.launchSite) about.push(ddRow('From', rec.launchSite));
+    if (rec.perigeeKm && rec.apogeeKm) {
+      const pe = rec.perigeeKm, ap = rec.apogeeKm;
+      about.push(ddRow('Altitude', (ap - pe) <= 30
+        ? `~${pe.toLocaleString()} km`
+        : `${pe.toLocaleString()}–${ap.toLocaleString()} km`));
+    }
+    if (rec.periodMin) about.push(ddRow('Orbit period',
+      rec.periodMin >= 600 ? `${(rec.periodMin / 60).toFixed(1)} h` : `${Math.round(rec.periodMin)} min`));
+    if (rec.inclinationDeg != null) about.push(ddRow('Inclination', `${rec.inclinationDeg}°`));
+    if (rec.objectType) about.push(ddRow('Type', rec.objectType));
+  }
+  document.getElementById('dd-about').innerHTML =
+    about.join('') || ddRow('Launched', li ? `${li.year} · ${li.designator}` : 'unknown');
 
   const statusEl = document.getElementById('dd-status');
   const grid     = document.getElementById('dd-grid');

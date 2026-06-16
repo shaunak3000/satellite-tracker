@@ -18,21 +18,8 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install dependencies
-        run: pip install requests
-
-      # Non-blocking: if the upstream TLE source is down, keep the existing
-      # tles.json and still run enrichment on it.
-      - name: Fetch TLE data
+      - name: Fetch TLEs + metadata (CelesTrak)
         run: python fetch_tles.py
-        continue-on-error: true
-
-      - name: Enrich with Space-Track SATCAT (country, launch date)
-        env:
-          SPACE_TRACK_IDENTITY: ${{ secrets.SPACE_TRACK_IDENTITY }}
-          SPACE_TRACK_PASSWORD: ${{ secrets.SPACE_TRACK_PASSWORD }}
-          SPACE_TRACK_CREDS: ${{ secrets.SPACE_TRACK_CREDS }}
-        run: python enrich_satcat.py
 
       - name: Commit and push tles.json
         run: |
