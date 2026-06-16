@@ -239,8 +239,59 @@
   tbody td.cat.Military { color: var(--military); }
   tbody td.cat.Other    { color: var(--other); }
 
+  tbody tr { cursor: pointer; }
+  tbody tr.selected { background: rgba(203, 166, 247, 0.18) !important; }
+  tbody tr.selected td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+
+  /* ── Detail drawer ───────────────────────────────────────────── */
+  #detail-drawer {
+    position: fixed;
+    top: 0; right: 0;
+    height: 100vh;
+    width: 320px;
+    max-width: 86vw;
+    background: var(--surface);
+    border-left: 1px solid var(--overlay);
+    box-shadow: -8px 0 24px rgba(0, 0, 0, 0.35);
+    transform: translateX(110%);
+    transition: transform 0.22s ease;
+    z-index: 200;
+    padding: 18px;
+    overflow-y: auto;
+  }
+  #detail-drawer.open { transform: translateX(0); }
+  .dd-close {
+    position: absolute; top: 10px; right: 12px;
+    background: none; border: none; color: var(--subtext);
+    font-size: 1.4rem; line-height: 1; cursor: pointer;
+  }
+  .dd-close:hover { color: var(--text); }
+  .dd-name { font-size: 1.05rem; font-weight: 600; color: var(--accent); padding-right: 24px; }
+  .dd-norad { color: var(--subtext); font-size: 0.8rem; margin-top: 2px; }
+  .dd-cat { font-weight: 600; font-size: 0.78rem; margin-top: 8px; }
+  .dd-status { font-size: 0.8rem; color: var(--military); margin-top: 4px; }
+  .dd-grid {
+    display: grid; grid-template-columns: auto 1fr; gap: 6px 14px;
+    margin-top: 16px; font-size: 0.85rem;
+  }
+  .dd-grid dt { color: var(--subtext); }
+  .dd-grid dd { color: var(--text); text-align: right; font-variant-numeric: tabular-nums; }
+  .dd-section-title {
+    font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em;
+    color: var(--accent); margin-top: 20px; padding-bottom: 6px;
+    border-bottom: 1px solid var(--overlay);
+  }
+  .dd-nextpass { font-size: 0.85rem; margin-top: 10px; line-height: 1.6; color: var(--text); }
+
   @media (max-width: 700px) {
     #charts-row { grid-template-columns: 1fr; }
+    #detail-drawer {
+      top: auto; bottom: 0; left: 0; right: 0;
+      width: 100%; max-width: 100%; height: auto; max-height: 70vh;
+      transform: translateY(110%);
+      border-left: none; border-top: 1px solid var(--overlay);
+    }
+    #detail-drawer.open { transform: translateY(0); }
   }
 </style>
 </head>
@@ -312,6 +363,17 @@
   </div>
 </div>
 
+<aside id="detail-drawer" aria-hidden="true">
+  <button class="dd-close" id="dd-close" title="Close (Esc)">×</button>
+  <div class="dd-name" id="dd-name">—</div>
+  <div class="dd-norad" id="dd-norad"></div>
+  <div class="dd-cat" id="dd-cat"></div>
+  <div class="dd-status" id="dd-status"></div>
+  <dl class="dd-grid" id="dd-grid"></dl>
+  <div class="dd-section-title">Next Pass</div>
+  <div class="dd-nextpass" id="dd-nextpass">—</div>
+</aside>
+
 <div id="sky-tooltip"></div>
 
 <script>
@@ -347,6 +409,7 @@ let sortCol      = 'elevation';
 let sortDesc     = true;
 let scatterChart = null;
 let domeHitMap   = [];    // [{x, y, r, sat}] for hover detection
+let selectedNorad = null; // NORAD id of the selected satellite (string), or null
 
 // ─── Category filter state ─────────────────────────────────────────────────
 const catEnabled = Object.fromEntries(CATEGORIES.map(c => [c, true]));
@@ -578,6 +641,7 @@ function drawSkyDome(sats) {
 
   // Plot satellites
   domeHitMap = [];
+  let selDot = null;
   for (const sat of sats) {
     const elev  = sat.elevation;
     const azRad = (sat.azimuth * Math.PI) / 180;
@@ -594,6 +658,21 @@ function drawSkyDome(sats) {
     ctx.globalAlpha = 1;
 
     domeHitMap.push({ x, y, r: dotR + 4, sat });
+    if (String(sat.norad) === selectedNorad) selDot = { x, y, sat };
+  }
+
+  // Selection ring + label, drawn on top
+  if (selDot) {
+    ctx.beginPath();
+    ctx.arc(selDot.x, selDot.y, 8, 0, 2 * Math.PI);
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 11px Segoe UI';
+    ctx.textAlign = 'left';
+    ctx.fillText(selDot.sat.name, selDot.x + 11, selDot.y + 4);
+    ctx.textAlign = 'start';
   }
 
   // Legend
@@ -688,7 +767,7 @@ function updateTable(sats) {
   });
 
   tableBody.innerHTML = sorted.map(s => `
-    <tr>
+    <tr data-norad="${s.norad}" class="${String(s.norad) === selectedNorad ? 'selected' : ''}">
       <td>${s.name}</td>
       <td class="norad">${s.norad}</td>
       <td>${s.elevation}°</td>
@@ -713,6 +792,12 @@ tableHead.querySelectorAll('th').forEach(th => {
 // Initial sort indicator
 tableHead.querySelector('[data-col="elevation"]').className = 'sort-desc';
 
+// Row click → select satellite (event delegation, survives innerHTML rebuilds)
+tableBody.addEventListener('click', e => {
+  const tr = e.target.closest('tr');
+  if (tr && tr.dataset.norad) selectSat(tr.dataset.norad);
+});
+
 // ─── Render all views ───────────────────────────────────────────────────────
 function renderAll() {
   const minElev = parseInt(elevSlider.value);
@@ -727,7 +812,72 @@ function renderAll() {
     `${overhead.length.toLocaleString()} satellites above ${minElev}° · ` +
     `${allTLEs.length.toLocaleString()} total loaded · ` +
     `Updated ${now} · Auto-refresh every 30s`;
+
+  renderDrawer();
 }
+
+// ─── Selection + detail drawer ──────────────────────────────────────────────
+const drawer = document.getElementById('detail-drawer');
+
+function selectSat(norad) {
+  norad = String(norad);
+  selectedNorad = (selectedNorad === norad) ? null : norad;   // click again to deselect
+  renderDrawer();
+  drawSkyDome(overhead);   // redraw to add/remove the selection ring
+  updateTable(overhead);   // reapply the selected-row highlight
+}
+
+function clearSelection() {
+  selectedNorad = null;
+  renderDrawer();
+  drawSkyDome(overhead);
+  updateTable(overhead);
+}
+
+function ddRow(k, v) { return `<dt>${k}</dt><dd>${v}</dd>`; }
+
+const COMPASS_16 = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
+function compass(az) { return COMPASS_16[Math.round(az / 22.5) % 16]; }
+
+function renderDrawer() {
+  if (!selectedNorad) {
+    drawer.classList.remove('open');
+    drawer.setAttribute('aria-hidden', 'true');
+    return;
+  }
+  const live = overhead.find(s => String(s.norad) === selectedNorad);
+  const base = allTLEs.find(t => String(t.norad) === selectedNorad);
+  if (!live && !base) { clearSelection(); return; }   // stale id — nothing to show
+
+  const meta  = live || base;
+  const color = CAT_COLORS[meta.category];
+  document.getElementById('dd-name').textContent  = meta.name;
+  document.getElementById('dd-norad').textContent = 'NORAD ' + selectedNorad;
+  const catEl = document.getElementById('dd-cat');
+  catEl.textContent = meta.category;
+  catEl.style.color = color;
+
+  const statusEl = document.getElementById('dd-status');
+  const grid     = document.getElementById('dd-grid');
+  if (live) {
+    statusEl.textContent = '';
+    grid.innerHTML =
+      ddRow('Elevation',    live.elevation + '°') +
+      ddRow('Azimuth',      live.azimuth + '° (' + compass(live.azimuth) + ')') +
+      ddRow('Altitude',     live.height_km.toLocaleString() + ' km') +
+      ddRow('Lateral dist', live.lateral_km.toLocaleString() + ' km') +
+      ddRow('Slant range',  live.range_km.toLocaleString() + ' km');
+  } else {
+    statusEl.textContent = 'Below horizon now';
+    grid.innerHTML = '';
+  }
+  document.getElementById('dd-nextpass').textContent = '—';   // filled in Step 2
+  drawer.classList.add('open');
+  drawer.setAttribute('aria-hidden', 'false');
+}
+
+document.getElementById('dd-close').addEventListener('click', clearSelection);
+document.addEventListener('keydown', e => { if (e.key === 'Escape') clearSelection(); });
 
 // ─── Sky dome hover ─────────────────────────────────────────────────────────
 domeCanvas.addEventListener('mousemove', e => {
@@ -756,6 +906,16 @@ domeCanvas.addEventListener('mousemove', e => {
   }
 });
 domeCanvas.addEventListener('mouseleave', () => { tooltip.style.opacity = '0'; });
+
+// Sky dome click → select satellite
+domeCanvas.addEventListener('click', e => {
+  const rect = domeCanvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+  for (const h of domeHitMap) {
+    const dx = mx - h.x, dy = my - h.y;
+    if (dx * dx + dy * dy <= h.r * h.r) { selectSat(h.sat.norad); return; }
+  }
+});
 
 // ─── Controls wiring ────────────────────────────────────────────────────────
 elevSlider.addEventListener('input', () => {
