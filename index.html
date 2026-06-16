@@ -424,6 +424,9 @@
   <div class="dd-norad" id="dd-norad"></div>
   <div class="dd-cat" id="dd-cat"></div>
   <div class="dd-status" id="dd-status"></div>
+  <div class="dd-section-title">About</div>
+  <dl class="dd-grid" id="dd-about"></dl>
+  <div class="dd-section-title">Position</div>
   <dl class="dd-grid" id="dd-grid"></dl>
   <div class="dd-section-title">Next Pass</div>
   <div class="dd-nextpass" id="dd-nextpass">—</div>
@@ -897,6 +900,17 @@ function ddRow(k, v) { return `<dt>${k}</dt><dd>${v}</dd>`; }
 const COMPASS_16 = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
 function compass(az) { return COMPASS_16[Math.round(az / 22.5) % 16]; }
 
+// Launch info from the TLE international designator (line1 cols 10–17), e.g.
+// "98067A" → { year: 1998, designator: "1998-067A" }. Free for every object.
+function launchInfo(line1) {
+  if (!line1) return null;
+  const intl = line1.substring(9, 17).trim();
+  if (!/^\d{5}/.test(intl)) return null;
+  const yy = parseInt(intl.substring(0, 2), 10);
+  const year = yy >= 57 ? 1900 + yy : 2000 + yy;   // Sputnik (1957) is the epoch
+  return { year, designator: `${year}-${intl.substring(2, 5)}${intl.substring(5).trim()}` };
+}
+
 // ─── Next-pass prediction ───────────────────────────────────────────────────
 const PASS_MIN_ELEV = 10;   // degrees — threshold for a "meaningful" visible pass
 let passCache = { norad: null, data: null };
@@ -1028,6 +1042,18 @@ function renderDrawer() {
   const catEl = document.getElementById('dd-cat');
   catEl.textContent = meta.category;
   catEl.style.color = color;
+
+  // About: launch (from TLE) + any SATCAT/UCS fields merged into the record
+  const rec = base || live;
+  const li = launchInfo(rec && rec.line1);
+  const about = [];
+  if (rec && rec.launchDate) about.push(ddRow('Launched', `${rec.launchDate}${li ? ' · ' + li.designator : ''}`));
+  else if (li) about.push(ddRow('Launched', `${li.year} · ${li.designator}`));
+  if (rec && rec.country)    about.push(ddRow('Country', rec.country));
+  if (rec && rec.operator)   about.push(ddRow('Operator', rec.operator));
+  if (rec && rec.purpose)    about.push(ddRow('Purpose', rec.purpose));
+  if (rec && rec.objectType) about.push(ddRow('Type', rec.objectType));
+  document.getElementById('dd-about').innerHTML = about.join('') || ddRow('Launched', 'unknown');
 
   const statusEl = document.getElementById('dd-status');
   const grid     = document.getElementById('dd-grid');
