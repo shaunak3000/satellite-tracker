@@ -46,6 +46,7 @@ COUNTRY_NAMES = {
     "VTNM": "Vietnam", "EGYP": "Egypt", "ALG": "Algeria", "NIG": "Nigeria",
     "PAKI": "Pakistan", "MALA": "Malaysia", "TWN": "Taiwan", "CZCH": "Czech Republic",
     "AB": "Arab Sat. League", "ASRA": "Austria", "CHBZ": "China/Brazil", "ESRI": "Eritrea",
+    "TBD": "Unknown", "TBA": "Unknown", "UNK": "Unknown",
 }
 
 
