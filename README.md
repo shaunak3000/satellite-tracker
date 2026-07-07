@@ -2,18 +2,22 @@
 
 **Live app: [shaunak3000.github.io/satellite-tracker](https://shaunak3000.github.io/satellite-tracker/)**
 
+[![3D globe view — every active satellite in Earth-centered coordinates](docs/globe.png)](https://shaunak3000.github.io/satellite-tracker/)
+
 A single-page web app that shows every satellite above your horizon right now — computed entirely in your browser from live orbital data. No backend, no API keys: the page loads a daily-refreshed catalog of ~15,700 active satellites and propagates each orbit locally with SGP4.
 
 ## What's in the app
 
-**Views**
+### Views
 
 - **Sky Dome** — a polar plot of the sky as seen from your location: center is straight up (zenith), the edge is the horizon, north at top. Each dot is a satellite overhead.
 - **3-D Cross-Section** — altitude above ground vs. lateral distance, a side-on view of everything passing over you.
 - **3D View** — an interactive Three.js globe (real NASA Blue Marble texture) with the full satellite cloud in Earth-centered coordinates. Click your observer pin to drop into a ground-level planetarium view showing only the satellites above your horizon; click any dot to select it.
 - **Table** — every overhead satellite with name, NORAD ID, elevation, azimuth, altitude, and range, sortable by any column.
 
-**Selection & detail drawer**
+![Main view — sky dome, cross-section, and the overhead table](docs/overview.png)
+
+### Selection & detail drawer
 
 Click any satellite (table row, sky-dome dot, or 3D point) to open a detail drawer with:
 
@@ -21,7 +25,9 @@ Click any satellite (table row, sky-dome dot, or 3D point) to open a detail draw
 - **Next-pass prediction** — when the satellite will next rise above 10°, where to look (compass direction), how high it will get, and how long it stays visible. Computed by stepping the orbit up to 36 hours ahead.
 - **About** — status, country, launch date and site, perigee–apogee altitude, orbit period, and inclination, from the CelesTrak satellite catalog.
 
-**Controls**
+![Detail drawer — live position, metadata, and next-pass prediction for a selected satellite](docs/drawer.png)
+
+### Controls
 
 - **Use My Location** — browser geolocation, with St Paul, MN as the silent default.
 - **Min Elevation slider** — hide satellites low on the horizon.
@@ -31,7 +37,7 @@ Click any satellite (table row, sky-dome dot, or 3D point) to open a detail draw
 ## How it works
 
 | Piece | Role |
-|---|---|
+| --- | --- |
 | `index.html` | The entire app — UI, orbit propagation, and all three visualizations in one file |
 | `fetch_tles.py` | Fetches TLEs for all active satellites from [CelesTrak](https://celestrak.org/) and enriches them with SATCAT metadata (country, launch, orbit) in one pass |
 | `tles.json` | The resulting catalog, committed daily by CI |
