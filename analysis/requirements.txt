@@ -1,0 +1,7 @@
+numpy
+pandas
+matplotlib
+sgp4
+jupytext
+nbconvert
+ipykernel
